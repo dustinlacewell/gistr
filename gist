@@ -112,6 +112,7 @@ if "__main__" == __name__:
     gist = post_gist(gist_data, token)
     url = gist.get('html_url')
     if url:
+        print "Setting clipboard to:", url
         paste(url)
         exit(0)
     else:
