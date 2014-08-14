@@ -1,0 +1,119 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import argparse
+import getpass
+
+import requests
+import simplejson as json
+
+CLIENT_ID = '30fa7127deb1c83d4b86'
+CLIENT_SECRET = '737af3ed0bb23b8a7fe0d0b80df1f2ded542aea1'
+
+def get_file_data(filename):
+    with open(filename, 'r') as fobj:
+         content = fobj.read()
+         return {filename: {'content': content}}
+
+def get_stdin_json():
+    content = sys.stdin.read()
+    return {'stdin': {'content': content}}
+
+def get_gist_json(filenames, public=False):
+    files = {}
+    for filename in filenames:
+        files.update(get_file_data(filename))
+    if not files:
+        files.update(get_stdin_json())
+    return json.dumps({'files': files, 'public': public})
+
+def get_options():
+    parser = argparse.ArgumentParser(description="Commandline gist utility")
+    parser.add_argument('--public', dest='public', action='store_true', default=False,
+                        help='Marks the gist as publically viewable')
+    parser.add_argument('--token', dest='token', action='store', default=None, type=str,
+                        help='Specifies a file containing user OAuth token.')
+    parser.add_argument('--user', dest='user', default=None, type=str,
+                        help='Specifies a user to associate the gist with.')
+    parser.add_argument('files', nargs='*')
+    options = parser.parse_args()
+    return options
+
+def post_gist(gist_data, token=None):
+    print "Posting content to api.github.com ..."
+    headers = {}
+    if token:
+        headers['Authorization'] = 'token {}'.format(token)
+    resp = requests.post(
+        "https://api.github.com/gists", data=gist_data, headers=headers)
+    return resp.json()
+
+def paste(str, p=True, c=True):
+    from subprocess import Popen, PIPE
+
+    if p:
+        p = Popen(['xsel', '-pi'], stdin=PIPE)
+        p.communicate(input=str)
+    if c:
+        p = Popen(['xsel', '-bi'], stdin=PIPE)
+        p.communicate(input=str)
+                    
+def get_oauth_token(username, password):
+    print "Requesting OAuth token for user `{}`...".format(username)
+    data = json.dumps({
+        'scopes': ['gist'],
+        'note': 'gistr oauth authentication token',
+        'client_id': CLIENT_ID,
+        'client_secret': CLIENT_SECRET,
+    })
+    resp = requests.post(
+        "https://api.github.com/authorizations", data=data, auth=(username, password))
+    return resp.json()
+
+def read_oauth_data(filename='~/.gistr'):
+    filename = os.path.expanduser(filename)
+    try:
+        with open(filename, 'r') as fobj:
+            return json.loads(fobj.read().strip())
+    except: pass
+
+def write_oauth_data(data, filename='~/.gistr'):
+    filename = os.path.expanduser(filename)
+    with open(filename, 'w') as fobj:
+        fobj.write(json.dumps(data))
+
+def get_user_password(user):
+    return getpass.getpass('Password for `{}`:'.format(user))
+
+def get_token(options):
+    tokenfile = options.token or '~/.gistr'
+    oauth_data = read_oauth_data(tokenfile) or {}
+    token = None
+    if options.user:
+        if options.user not in oauth_data:
+            password = get_user_password(options.user)
+            oauth_response = get_oauth_token(options.user, password)
+            if 'token' not in oauth_response:
+                print "Couldn't authenticate user `{}`:".format(options.user)
+                print oauth_response
+            else:
+                token = oauth_response['token']
+                oauth_data[options.user] = token
+                write_oauth_data(oauth_data, tokenfile)
+        else:
+            token = oauth_data[options.user]
+    return token
+
+if "__main__" == __name__:
+    options = get_options()
+    token = get_token(options)
+    gist_data = get_gist_json(options.files, public=options.public)
+    gist = post_gist(gist_data, token)
+    url = gist.get('html_url')
+    if url:
+        paste(url)
+        exit(0)
+    else:
+        sys.stderr.write("\n{0}\n".format(gist.get('message')))
+        exit(1)
